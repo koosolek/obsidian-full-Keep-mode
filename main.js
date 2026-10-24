@@ -908,6 +908,12 @@ function checklistExtension(plugin) {
 				const line = state.doc.lineAt(sel.head);
 				if (textStart(state.doc, line) !== sel.head) return false;
 				if (line.from <= bodyStart(state.doc)) return true; // the very first item: nothing to join to
+				const prev = state.doc.line(line.number - 1);
+				if (isBlank(prev.text)) {
+					// An empty line above goes away; the item keeps its checkbox.
+					view.dispatch({ changes: { from: prev.from, to: line.from }, selection: { anchor: sel.head - (line.from - prev.from) }, userEvent: "delete.backward", scrollIntoView: true });
+					return true;
+				}
 				view.dispatch({ changes: { from: line.from - 1, to: sel.head }, selection: { anchor: line.from - 1 }, userEvent: "delete.backward", scrollIntoView: true });
 				return true;
 			},
@@ -923,6 +929,11 @@ function checklistExtension(plugin) {
 				const next = state.doc.line(line.number + 1);
 				const end = textStart(state.doc, next);
 				if (end === null) return false;
+				if (isBlank(line.text)) {
+					// An empty line goes away; the item below keeps its checkbox.
+					view.dispatch({ changes: { from: line.from, to: next.from }, selection: { anchor: line.from + (end - next.from) }, userEvent: "delete.forward" });
+					return true;
+				}
 				view.dispatch({ changes: { from: line.to, to: end }, userEvent: "delete.forward" });
 				return true;
 			},
@@ -1643,6 +1654,7 @@ module.exports = class FullKeepModePlugin extends obsidian.Plugin {
 		}
 		this.app.workspace.onLayoutReady(() => {
 			if (!this._loaded) return; // turned off (reloaded or updated) in the meantime
+			this.labelsSidebarShown = this.settings.labelsSidebar;
 			if (this.settings.labelsSidebar) void this.openLabelsView(false);
 			// The board as the home screen, like Keep: at start, and on phones instead of
 			// an empty "New tab" (e.g. after closing the board by accident).
@@ -1772,9 +1784,28 @@ module.exports = class FullKeepModePlugin extends obsidian.Plugin {
 
 	async saveSettings() {
 		await this.saveSharedSettings();
+		this.applySettings();
+	}
+
+	// The settings changed on another device and came in with sync (data.json changed):
+	// use them here too. Without this the old ones stayed until a restart, and the next
+	// save here (e.g. of a ticked item's place) wrote them back over the new ones.
+	async onExternalSettingsChange() {
+		await this.loadSettings();
+		this.applySettings();
+	}
+
+	applySettings() {
 		this.applyBodyClasses();
 		this.renderButtons();
 		this.refreshEditors();
+		this.labelsView()?.render();
+		// The side menu opens or closes when its setting changes (not only at start).
+		if (this.app.workspace.layoutReady && this.settings.labelsSidebar !== this.labelsSidebarShown) {
+			this.labelsSidebarShown = this.settings.labelsSidebar;
+			if (this.settings.labelsSidebar) void this.openLabelsView(false);
+			else this.app.workspace.detachLeavesOfType(LABELS_VIEW);
+		}
 	}
 
 	// Redraw all open editors after a settings change.
